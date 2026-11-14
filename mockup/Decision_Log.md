@@ -1,0 +1,94 @@
+# Decision Log: Dashboard Mockup
+
+| | |
+|---|---|
+| Date | 2026-11-15 |
+| Applies to | `mockup/PRD.md` v0.8 |
+| Source of decisions | Project owner's replies to the assumptions and open questions listed in PRD v0.7 |
+
+This file records the assumptions made while drafting the PRD and the answers given to each open question, so the reasoning stays traceable. The PRD holds the resulting requirements. This file holds the "why".
+
+## 1. Assumptions
+
+**Status: all confirmed.** The project owner confirmed on 2026-11-15 that "all assumptions made are valid". Questions Q1 to Q8 below also settle several of them explicitly, as noted.
+
+### Data and synthetic inputs
+| # | Assumption | Status |
+|---|---|---|
+| A1 | `Handover Time` is the forwarder arrival time, known exactly when the LL is cut, and is also when the LL leaves staging | Confirmed |
+| A2 | Handover times come from a normal distribution fitted to historic data, floored at `Added Date` + 1 hour. The real data is lumpy (72% between 14:00 and 18:59), and 24% of sampled times fall at or after 19:00 | Confirmed |
+| A3 | Forwarders are uniform across A to L, paired into zones 1 to 6. The real mix is about 60% one forwarder | Confirmed |
+| A4 | Pallets = `ceil(Cartons / 50)`, minimum 1 | Confirmed |
+| A5 | Zone capacity is 48 pallets, and one location is one pallet | Confirmed (see Q6) |
+| A6 | `Complete Date` is ignored. The real call-out and staging times in the data are not used, because the simulation produces its own | Confirmed |
+| A7 | One day of data stands for a typical day. It is a heavy day (3,248 DNs, against the SDP's 2,000 to 3,250) | Confirmed |
+
+### Priority queue
+| # | Assumption | Status |
+|---|---|---|
+| A8 | The key is smallest gap first (`Handover Time` minus `Added Date`) | Confirmed (see Q1) |
+| A9 | The key is fixed at cut time. Long-gap LLs can be overtaken by later short-gap ones | Confirmed |
+| A10 | Ties go to the earlier `Added Date` | Confirmed |
+
+### Lanes
+| # | Assumption | Status |
+|---|---|---|
+| A11 | Lane queue size is measured in cartons, and includes the LL being processed | Confirmed |
+| A12 | Processing time is linear in cartons (100 per hour per lane), with no setup, travel or breaks, and all 12 lanes work all day | Confirmed |
+| A13 | The shortest lane (fewest cartons, lowest number on a tie) is checked. If an LL does not fit it, it fits no lane | Confirmed |
+| A14 | No overshoot: the lane's queue plus the LL's cartons must not exceed 100 | Confirmed |
+| A15 | Oversize LLs (over 100 cartons) go only to an empty lane, which they then hold alone. Ten LLs are affected | Confirmed |
+| A16 | An LL that fits no lane blocks the queue. Only zone-blocked LLs are skipped | Confirmed (see Q5) |
+| A17 | A lane's queue size drops only when an LL finishes, by its whole carton count | Confirmed |
+| A18 | Staging is immediate when processing finishes. No travel time | Confirmed |
+
+### Zones and lateness
+| # | Assumption | Status |
+|---|---|---|
+| A19 | Zone fullness counts staged LLs plus LLs still in a lane, because a called-out LL reserves its space | Confirmed (see Q3) |
+| A20 | The zone check is "fits": pallets in the zone plus the LL's pallets must not exceed capacity | Confirmed (see Q4) |
+| A21 | An LL whose forwarder has arrived skips the zone check, reserves no pallets, and is handed over the moment it is staged | Confirmed |
+| A22 | Late means not staged by `Handover Time`. Lateness runs from handover time to staging | Confirmed |
+| A23 | Calls continue after the SDP's 16:00 cut-off | Confirmed (see Q8) |
+
+### Process
+| # | Assumption | Status |
+|---|---|---|
+| A24 | The section 8 figures in the PRD come from a throwaway script, not the engine. They are expected values, to be reproduced once the engine exists | Confirmed |
+| A25 | Staging time in the results counts only LLs that were not late | Confirmed |
+| A26 | Streamlit is the front end, with the day computed once and replayed. `streamlit` still needs adding to `requirements.txt` | Confirmed |
+
+## 2. Open questions and responses
+
+| # | Question | Response | Effect on the PRD |
+|---|---|---|---|
+| Q1 | Which way round is the priority key, smallest gap first or largest? | **Smallest gap first.** | The "creation minus handover" wording is settled as smallest gap first. The assumption flag and the open question were removed from SIM-5 |
+| Q2 | Should call-out wait until closer to arrival, to cut staging time? | **No. Keep the current call-out rule.** The reasoning given: even if staging time is minimised overall, staging space is still wasted, so waiting does not solve the underlying problem | No release window. Added to the Non-Goals. The long staging time (mean 341 minutes) stays as a known cost, and finding 5 in section 8 now refers to it as a result of this decision. The staging time readout (DSH-7) stays so reviewers can see it |
+| Q3 | Should LLs in a lane count towards zone fullness? | **Yes, based on the current rule.** | SIM-16 confirmed. The assumption flag was removed |
+| Q4 | Should the zone check be "fits" or "not full"? | **Fits. A zone cannot exceed capacity.** | SIM-15 confirmed. The build check that no zone exceeds capacity stays |
+| Q5 | Should an LL that does not fit a lane block the queue? | **Yes, for this simulation let them block the queue.** | SIM-14 step 4 now says this is by design. A build check was added for it |
+| Q6 | Is 48 locations per zone correct, and is one location one pallet? | **Yes, that is correct.** | The assumption flag was removed from `zone_capacity` in section 4.3 |
+| Q7 | Is the zone imbalance acceptable? | **Keep the imbalance for now.** | No change to the data. A note was added to the `Zone` row in section 4.2. Zones 3 and 5 will keep filling and zone 6 will not |
+| Q8 | What should the page say about the 10 LLs cut after 16:00? | **Keep to the simulation values and ignore this detail from the document.** | The 16:00 cut-off marker (old DSH-4), the cut-off rule (old SIM-20) and the data-fact bullet about 10 late cuts were removed. Added to the Non-Goals. Dashboard requirement numbers were renumbered, so DSH-5 onwards moved down by one |
+
+## 3. Changes made to the PRD (v0.7 to v0.8)
+
+- Status line, related files, and a pointer to this log added.
+- Purpose and goals reworded so they no longer claim the rule minimises staging time.
+- Non-Goals extended with: no release window, no 16:00 cut-off.
+- SIM-5, SIM-16 and the `zone_capacity` parameter: assumption flags removed.
+- SIM-14 step 4: blocking stated as by design.
+- SIM-20 replaced: calls continue with no cut-off.
+- The 16:00 marker requirement removed, and the DSH numbers renumbered.
+- Section 9 replaced: open questions became a short table of decisions D1 to D8.
+- Build checks: one check added for queue blocking.
+- Milestones: the "settle open questions" step is marked done, and the Step 4 requirement numbers were updated.
+
+## 4. Items to revisit later
+
+These are not open questions for the mockup, but they are choices made for the simulation that the full build may change.
+
+- **Call-out timing (Q2).** The full M3 model uses estimated arrival as a soft constraint and calls out "closer to forecast arrival" (SDP 4.3, 3.3). The mockup does not.
+- **The 16:00 cut-off (Q8).** The SDP states that all LLs are called out by 16:00. The mockup ignores it.
+- **Zone mapping (Q7).** Forwarders were assigned to zones at random. Real zones are arranged alphabetically by forwarder and sized by DSV data (SDP 2.1, 5.2).
+- **Priority key (Q1).** The mockup's key is a stand-in for the M3 weighted score (SDP 4.3).
