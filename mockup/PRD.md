@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| Status | Draft v0.8 (all open questions resolved) |
+| Status | Draft v0.9 (all open questions resolved, simulation engine built and tested) |
 | Date | 2026-11-15 |
 | Location | `mockup/` (all mockup files live here) |
-| Related | `mockup/Decision_Log.md`, `mockup/Data _Prep.ipynb`, `data/Mockup_Data.xlsx`, SDP sections 2.2, 3.1 (requirement 6), 4.4 |
+| Related | `mockup/engine.py`, `mockup/test_engine.py`, `mockup/Decision_Log.md`, `mockup/Data _Prep.ipynb`, `data/Mockup_Data.xlsx`, SDP sections 2.2, 3.1 (requirement 6), 4.4 |
 
 > Every assumption in earlier drafts has been confirmed, and every open question has been answered. The full record is in [Decision_Log.md](Decision_Log.md). Section 8 reports what a trial run of these rules on the real data showed.
 
@@ -193,30 +193,31 @@ Layout: readable on a laptop or a wall display. The visual design follows the re
 ## 7. Technical Approach
 
 - **Pipeline:** `mockup/Data _Prep.ipynb` is the only place synthetic columns are generated. It writes `data/Mockup_Data.xlsx`.
-- **Simulation engine:** a plain Python module under `mockup/`, with no Streamlit dependency, so it can be tested alone. It runs the day as a discrete-event simulation (events are an LL being cut, an LL finishing processing, and a handover) and writes out a full timeline of states. Given a clock time it returns the queue (with each row's ready or held-back status), lane contents, zone occupancy, late LLs and counters.
+- **Simulation engine (built):** `mockup/engine.py`, a plain Python module with no Streamlit dependency. It runs the day as a discrete-event simulation (events are an LL being cut, a forwarder arriving, an LL finishing processing, and a handover) and records every LL's timestamps. `Simulation.state_at(clock)` then returns the queue (with each row's reason held), lane contents, zone occupancy, late LLs and counters for any clock time, ready for the dashboard. `Simulation.summary()` gives the headline figures, `ll_table()` the per-LL results, and `event_log()` the event log (DSH-17).
+- **Tests (built):** `mockup/test_engine.py`, written for **pytest**. It holds small scenario tests, the section 10 build checks run on the real day, and checks of the section 8 figures. Run `python mockup/engine.py` for the summary, and `python -m pytest mockup -v` from the repository root for the tests (36 tests, all passing).
 - **Precompute, then replay.** Because the run is deterministic, the timeline is computed once per parameter set and cached (for example with `st.cache_data`). The clock only reads from it, which keeps the UI fast and makes pause, jump and restart simple. Changing a parameter recomputes the timeline.
 - **Streamlit:** two tabs matching section 6, and a clock that advances on a timer. Streamlit reruns the script on each interaction, so the clock position lives in `st.session_state`. `streamlit` is not yet in `requirements.txt` and must be added.
 - **Files:** every new file lives under `mockup/`.
 
 ## 8. Review: what a trial run of these rules showed
 
-I ran the section 5 rules over `Mockup_Data.xlsx` with a throwaway script. Treat these as expected values to reproduce with the real engine. Parameters are at the defaults except where noted. Lateness figures are in minutes. Staging time is the time from staging to handover, for LLs that were not late.
+These figures were produced by `mockup/engine.py` on `Mockup_Data.xlsx`, and the default row is checked by `test_engine.py`. Parameters are at the defaults except where noted. Lateness figures are in minutes. Staging time is the time from staging to handover, for LLs that were not late. The two reference rows use the engine's diagnostic switches (`arrived_skips_zone_check`, `zone_gate`). An earlier throwaway estimate gave slightly higher lateness (total 253 minutes), because it did not wake a waiting LL at the exact moment its forwarder arrived. The engine does.
 
 | Setup | Max LLs in queue | LLs that waited | Mean cut to staging | Late LLs | Lateness: mean / longest / total | Mean staging time | Staged pallets, peak per zone (1 to 6) |
 |---|---|---|---|---|---|---|---|
-| **12 lanes (spec)** | **30** | **60** | 30 min | **9** | **28 / 116 / 253** | 341 min | 48, 48, 48, 48, 48, 38 |
+| **12 lanes (spec)** | **30** | **60** | 30 min | **9** | **27 / 115 / 242** | 341 min | 48, 48, 48, 48, 48, 38 |
 | 12 lanes, no skip for arrived LLs | 32 | 60 | 31 min | 9 | 49 / 168 / 437 | 341 min | 48, 48, 48, 48, 48, 38 |
-| 6 lanes | 51 | 132 | 56 min | 9 | 32 / 116 / 286 | 314 min | 48, 46, 46, 48, 48, 36 |
-| 24 lanes | 30 | 58 | 29 min | 9 | 28 / 116 / 253 | 342 min | 48, 48, 48, 48, 48, 38 |
+| 6 lanes | 51 | 132 | 56 min | 9 | 32 / 115 / 285 | 314 min | 48, 46, 46, 48, 48, 36 |
+| 24 lanes | 30 | 58 | 29 min | 9 | 27 / 115 / 242 | 342 min | 48, 48, 48, 48, 48, 38 |
 | 12 lanes, no zone gate (reference) | 1 | 2 | 12 min | 1 | 55 / 55 / 55 | 350 min | 50, 48, 55, 50, 76, 38 |
 
 All 327 LLs are staged and handed over in every run.
 
 ### Findings
 1. **The zone gate at the queue works, and lanes never stall.** 58 different LLs were held back by a full zone at some point, up to 30 at once, and the LLs behind them kept flowing to lanes. 60 of the 327 waited in the queue, for 19 minutes on average and 373 minutes at most. Zones stay at or below 48.
-2. **Nine LLs are late (2.8%).** Mean lateness is 28 minutes, the median is about 6, and the longest is 116 minutes (a 192-carton LL for zone 5). Total lateness is 253 minutes. All nine are in zones 5 (seven LLs) and 3 (two LLs), the zones that stay full. Three of the nine have more than 100 cartons.
+2. **Nine LLs are late (2.8%).** Mean lateness is 27 minutes, the median is about 6, and the longest is 115 minutes (a 192-carton LL for zone 5). Total lateness is 242 minutes. All nine are in zones 5 (seven LLs) and 3 (two LLs), the zones that stay full. Three of the nine have more than 100 cartons.
 3. **The count of late LLs is the same, 9, with 6, 12 or 24 lanes.** Zone space, not lane capacity, drives lateness. More lanes only shorten the time spent in the queue.
-4. **Skipping the zone check for arrived LLs cuts total lateness from 437 to 253 minutes (42%)** and the worst case from 168 to 116 minutes. It does not change how many LLs are late.
+4. **Skipping the zone check for arrived LLs cuts total lateness from 437 to 242 minutes (45%)** and the worst case from 168 to 115 minutes. It does not change how many LLs are late. Six LLs used the skip in the default run.
 5. **LLs spend a long time in staging, and the gate barely changes it.** For LLs that were not late, the mean time in staging is 341 minutes (5.7 hours), the 95th percentile is 676 minutes, and the longest is 940 minutes. With no zone gate it is 350 minutes. Total pallet-hours in staging fall only 6% (2,036 against 2,158). This follows from the decision to call out as soon as space allows. The staging time readout (DSH-7) lets reviewers see this cost directly.
 6. **The priority queue has no effect on staging time.** Ordering by smallest gap decides who goes first, but every LL is sent out as soon as it can be.
 
@@ -266,8 +267,8 @@ SDP Table 14 puts "finalise M3 outputs and decision variables with Ops, finish m
 | Step | Deliverable | Depends on |
 |---|---|---|
 | 1 | Decisions recorded (done, see `Decision_Log.md`) | |
-| 2 | Simulation engine with the priority queue, lanes, zone gate and lateness tracking, and tests for the section 10 build checks | Step 1 |
-| 3 | Confirm the section 8 results from the engine | Step 2 |
+| 2 | Simulation engine with the priority queue, lanes, zone gate and lateness tracking, and tests for the section 10 build checks (**done**, `engine.py` and `test_engine.py`) | Step 1 |
+| 3 | Confirm the section 8 results from the engine (**done**, table refreshed) | Step 2 |
 | 4 | Streamlit dashboard v1: header, Tab 1 zone cards, counters and late panel, Tab 2 queue and lane panel (DSH-1, 2, 4 to 6, 11 to 14) | Step 3 |
 | 5 | Should items: settings panel, staging time, workload, zone detail | Step 4 |
 | 6 | Ops review session, with feedback captured for the December edits | Step 5 |

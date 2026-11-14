@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Date | 2026-11-15 |
-| Applies to | `mockup/PRD.md` v0.8 |
+| Applies to | `mockup/PRD.md` v0.9 |
 | Source of decisions | Project owner's replies to the assumptions and open questions listed in PRD v0.7 |
 
 This file records the assumptions made while drafting the PRD and the answers given to each open question, so the reasoning stays traceable. The PRD holds the resulting requirements. This file holds the "why".
@@ -84,7 +84,22 @@ This file records the assumptions made while drafting the PRD and the answers gi
 - Build checks: one check added for queue blocking.
 - Milestones: the "settle open questions" step is marked done, and the Step 4 requirement numbers were updated.
 
-## 4. Items to revisit later
+## 4. Implementation choices made while building the engine (PRD v0.9)
+
+These fill gaps the PRD left open. **I1 to I7 were accepted by the project owner on 2026-11-15** with no issues. I8 was changed by the owner's instruction.
+
+| # | Choice | Why | Status |
+|---|---|---|---|
+| I1 | A waiting LL is **woken at the exact moment its forwarder arrives**, so it skips the zone check at that moment | Without a trigger at arrival, the skip only happened at the next unrelated event. This lowered total lateness from 253 to 242 minutes compared with the earlier throwaway estimate | Accepted |
+| I2 | When several events share an instant, they are applied in this order: handovers, finishes, arrivals, cuts. The call-out step then runs once | Frees zone space before deciding who is called out, and keeps the run deterministic | Accepted |
+| I3 | Ties in the priority key go to the earlier `Added Date`, then to the lower LL number | The PRD gives only the first tie-break | Accepted |
+| I4 | A reserved LL whose forwarder arrives while it is still in a lane keeps its pallets reserved until it is staged, and is handed over at that moment | It has not yet been staged, so there is nothing to remove earlier | Accepted |
+| I5 | An LL staged at exactly its arrival time is **on time**. Late means strictly after | Avoids counting zero-second lateness | Accepted |
+| I6 | In the dashboard queue view, once calling has finished for an instant, every waiting LL that passes the zone gate is waiting for lane space, and only the first of them is marked "next" | Because an LL that does not fit a lane blocks the queue (D5), the rows behind it cannot move either | Accepted |
+| I7 | Two diagnostic switches (`zone_gate`, `arrived_skips_zone_check`) exist in the engine parameters | They only reproduce the two reference rows in PRD section 8. They are not dashboard settings | Accepted |
+| I8 | Tests are written for **pytest** (originally `unittest`, because pytest was not installed) | `pytest` has since been installed and is listed in `requirements.txt`. The tests were rewritten with fixtures, plain asserts and parametrisation, and now number 36 | Changed by owner, done |
+
+## 5. Items to revisit later
 
 These are not open questions for the mockup, but they are choices made for the simulation that the full build may change.
 

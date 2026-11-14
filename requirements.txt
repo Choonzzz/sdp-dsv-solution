@@ -6,3 +6,4 @@ ipykernel
 notebook
 openpyxl
 streamlit
+pytest
