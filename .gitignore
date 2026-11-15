@@ -3,3 +3,4 @@
 *.xlsx
 __pycache__/
 .pytest_cache/
+!data/Mockup_Data.xlsx
