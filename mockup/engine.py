@@ -1,21 +1,22 @@
 """Simulation engine for the M4 dashboard mockup.
 
-Implements section 5 of ``PRD.md`` (v0.8). It has no UI dependency. The day is
+Implements section 5 of ``PRD.md`` (v1.1). It has no UI dependency. The day is
 simulated once as a discrete-event simulation, and ``Simulation.state_at`` then
 reads the dashboard state for any clock time from the recorded timestamps.
 
 Rules in short:
-  * One priority queue, key = Handover Time - Added Date (smallest gap first,
-    ties to the earlier Added Date). The key never changes.
-  * 12 lanes (default), each a FIFO queue. Processing time = cartons / throughput.
+  * One priority queue, ranked by time to forwarder arrival (Handover Time minus
+    the current time), soonest first. As the current time is the same for every
+    LL, this is the same as ranking by arrival time, so the order never changes.
+    Ties go to the earlier Added Date, then the lower LL number.
+  * 12 lanes (default). A lane processes one LL at a time and has no queue
+    behind it. An LL waits in the priority queue until a lane is free, then goes
+    to the lowest-numbered free lane. There is no carton limit.
+    Processing time = cartons / throughput.
   * An LL may leave the queue only if its zone has room for its pallets
     (staged + in-lane pallets + LL pallets <= zone capacity). LLs whose zone is
     full are skipped. LLs whose forwarder has already arrived skip the zone check.
-  * An LL joins the lane with the smallest queue only if queue + cartons <= cap.
-    An LL bigger than the cap needs an empty lane. An LL that does not fit a
-    lane blocks the queue.
-  * A lane's queue size falls only when an LL finishes. A finished LL is staged
-    at once. At Handover Time it leaves staging.
+  * A finished LL is staged at once. At Handover Time it leaves staging.
   * An LL not staged by its Handover Time is late. It is handed over the moment
     it is staged.
 """
@@ -42,7 +43,6 @@ class Params:
 
     n_lanes: int = 12
     lane_throughput: float = 100.0  # cartons per hour, per lane
-    lane_queue_cap: int = 100  # cartons
     zone_capacity: int = 48  # pallets per zone
     # Diagnostic switches, used only to reproduce the reference rows of PRD section 8.
     zone_gate: bool = True  # False: ignore zone fullness when calling out
@@ -80,14 +80,13 @@ class Simulation:
         self.cartons = d["Cartons"].astype(int).tolist()
         self.pallets = d["Pallets"].astype(int).tolist()
         self.zone = d["Zone"].astype(int).tolist()
+        self.forwarder = d["Forwarder"].tolist() if "Forwarder" in d else [""] * len(d)
         self.cut = self._secs(d["Added Date"])
         self.arrival = self._secs(d["Handover Time"])  # forwarder arrival = handover
-        self.gap = [a - c for a, c in zip(self.arrival, self.cut)]
-        self.key = [(self.gap[i], self.cut[i], self.ll[i], i) for i in range(self.n)]
+        # Ranking by time to arrival (arrival - now) is ranking by arrival time.
+        self.key = [(self.arrival[i], self.cut[i], self.ll[i], i) for i in range(len(d))]
         self.zones = sorted(set(self.zone))
-        self.proc = [
-            c / self.params.lane_throughput * 3600.0 for c in self.cartons
-        ]
+        self.proc = [c / self.params.lane_throughput * 3600.0 for c in self.cartons]
 
     # ------------------------------------------------------------------- core
     def _run(self) -> None:
@@ -97,16 +96,15 @@ class Simulation:
         self.call = [nan] * n  # left the priority queue (called out)
         self.call_seq = [-1] * n  # order in which LLs were called out
         self.lane = [-1] * n
-        self.start = [nan] * n  # processing started
+        self.start = [nan] * n  # processing started (the same moment as the call-out)
         self.finish = [nan] * n  # processing finished = staged
         self.left = [nan] * n  # left staging (handed over)
-        self.reserved = [False] * n  # pallets reserved in the zone while in lane
+        self.reserved = [False] * n  # pallets reserved in the zone while in a lane
         self.bypass = [False] * n  # skipped the zone check (forwarder arrived)
         self.events: list[dict] = []
 
         self._queue: list[tuple] = []  # sorted list of keys
-        self._lane_q = [0] * p.n_lanes  # cartons in each lane's queue
-        self._lane_free = [0.0] * p.n_lanes  # time each lane's last LL finishes
+        self._lane_busy: list[int | None] = [None] * p.n_lanes  # LL index per lane
         self._zone_used = {z: 0 for z in self.zones}  # staged + reserved pallets
         self._zone_staged = {z: 0 for z in self.zones}  # staged pallets only
         self._seq = itertools.count()
@@ -115,7 +113,7 @@ class Simulation:
         self.max_queue_len = 0
         self.peak_used = {z: 0 for z in self.zones}
         self.peak_staged = {z: 0 for z in self.zones}
-        self.peak_lane_q = 0
+        self.peak_processing = 0
 
         heap: list[tuple] = []
         for i in range(n):
@@ -145,8 +143,7 @@ class Simulation:
         )
 
     def _on_finish(self, t: float, i: int) -> None:
-        lane = self.lane[i]
-        self._lane_q[lane] -= self.cartons[i]
+        self._lane_busy[self.lane[i]] = None  # the lane is free again
         z = self.zone[i]
         if t > self.arrival[i]:
             # Forwarder already here: staged and handed over at once (late).
@@ -168,7 +165,7 @@ class Simulation:
         self._log(t, "handover", i, late_s=0.0)
 
     def _dispatch(self, t: float) -> None:
-        """Move LLs from the priority queue into lanes while the rules allow."""
+        """Move LLs from the priority queue into free lanes while the rules allow."""
         p = self.params
         while self._queue:
             # Zone gate: the first LL in key order that has room, or whose forwarder
@@ -185,36 +182,33 @@ class Simulation:
                     break
             if cand_pos is None:
                 return
+
+            # Lane gate: a free lane, lowest number first. If every lane is busy, wait.
+            lane = next((L for L in range(p.n_lanes) if self._lane_busy[L] is None), None)
+            if lane is None:
+                return
+
             i = self._queue[cand_pos][3]
-
-            # Lane check: smallest queue, ties to the lowest lane number.
-            lane = min(range(p.n_lanes), key=lambda L: (self._lane_q[L], L))
-            q, c = self._lane_q[lane], self.cartons[i]
-            fits = q + c <= p.lane_queue_cap or (q == 0 and c > p.lane_queue_cap)
-            if not fits:
-                return  # this LL blocks the queue
-
             del self._queue[cand_pos]
             # Only an LL that actually skipped the check reserves nothing. With the
             # zone gate off, or when arrived LLs obey the gate, it reserves as normal.
             arrived = t >= self.arrival[i] and p.zone_gate and p.arrived_skips_zone_check
-            start = max(t, self._lane_free[lane])
-            finish = start + self.proc[i]
-            self._lane_free[lane] = finish
-            self._lane_q[lane] += c
-            self.peak_lane_q = max(self.peak_lane_q, self._lane_q[lane])
+            self._lane_busy[lane] = i
             self.call[i], self.call_seq[i] = t, next(self._calls)
-            self.lane[i], self.start[i], self.finish[i] = lane, start, finish
+            self.lane[i], self.start[i], self.finish[i] = lane, t, t + self.proc[i]
             if arrived:
                 self.bypass[i] = True
             else:
                 self.reserved[i] = True
                 self._zone_used[self.zone[i]] += self.pallets[i]
-            heapq.heappush(self._heap, (finish, _FINISH, next(self._seq), i))
+            heapq.heappush(self._heap, (self.finish[i], _FINISH, next(self._seq), i))
             self._log(t, "call_out", i, bypass=arrived)
 
     def _track_peaks(self) -> None:
         self.max_queue_len = max(self.max_queue_len, len(self._queue))
+        self.peak_processing = max(
+            self.peak_processing, sum(1 for b in self._lane_busy if b is not None)
+        )
         for z in self.zones:
             self.peak_used[z] = max(self.peak_used[z], self._zone_used[z])
             self.peak_staged[z] = max(self.peak_staged[z], self._zone_staged[z])
@@ -242,13 +236,12 @@ class Simulation:
 
     def ll_table(self) -> pd.DataFrame:
         """One row per LL with every timestamp the simulation produced."""
-        d = self.data[["LL", "Forwarder", "Zone", "Cartons", "Pallets"]].copy() \
-            if "Forwarder" in self.data else self.data[["LL", "Zone", "Cartons", "Pallets"]].copy()
+        cols = ["LL", "Forwarder", "Zone", "Cartons", "Pallets"]
+        d = self.data[[c for c in cols if c in self.data]].copy()
         d["Added"] = self.data["Added Date"]
         d["Arrival"] = self.data["Handover Time"]
         d["Called out"] = [self.to_dt(x) for x in self.call]
         d["Lane"] = self.lane
-        d["Processing start"] = [self.to_dt(x) for x in self.start]
         d["Staged"] = [self.to_dt(x) for x in self.finish]
         d["Left staging"] = [self.to_dt(x) for x in self.left]
         d["Queue wait (min)"] = [(a - b) / 60 for a, b in zip(self.call, self.cut)]
@@ -285,7 +278,7 @@ class Simulation:
             "LLs that skipped the zone check": int(sum(self.bypass)),
             "peak staged pallets per zone": dict(self.peak_staged),
             "peak used pallets per zone": dict(self.peak_used),
-            "peak lane queue (cartons)": self.peak_lane_q,
+            "peak LLs processing at once": self.peak_processing,
         }
 
     # --------------------------------------------------------------- snapshot
@@ -307,22 +300,23 @@ class Simulation:
         # Zone usage: staged pallets plus pallets reserved by LLs in a lane.
         staged_p = {z: 0 for z in self.zones}
         reserved_p = {z: 0 for z in self.zones}
+        staged_n = {z: 0 for z in self.zones}
+        reserved_n = {z: 0 for z in self.zones}
         for i in staged:
             staged_p[self.zone[i]] += self.pallets[i]
+            staged_n[self.zone[i]] += 1
         for i in in_lane:
             if self.reserved[i]:
                 reserved_p[self.zone[i]] += self.pallets[i]
+                reserved_n[self.zone[i]] += 1
         used = {z: staged_p[z] + reserved_p[z] for z in self.zones}
 
-        # Priority queue, in call-out order, with the reason each LL is held.
+        # Upcoming LLs (the priority queue), in call-out order, with the reason held.
         rows, next_marked = [], False
         for pos, i in enumerate(sorted(in_queue, key=lambda k: self.key[k]), start=1):
             arrived = t >= self.arrival[i]
             zone_full = not arrived and used[self.zone[i]] + self.pallets[i] > p.zone_capacity
-            if zone_full:
-                reason = f"zone {self.zone[i]} full"
-            else:
-                reason = "no lane space"
+            reason = f"zone {self.zone[i]} full" if zone_full else "all lanes busy"
             is_next = False
             if not zone_full and not next_marked:
                 is_next, next_marked = True, True
@@ -330,13 +324,13 @@ class Simulation:
                 {
                     "Position": pos,
                     "LL": self.ll[i],
-                    "Forwarder": self.data["Forwarder"].iloc[i] if "Forwarder" in self.data else "",
+                    "Forwarder": self.forwarder[i],
                     "Zone": self.zone[i],
                     "Cartons": self.cartons[i],
                     "Pallets": self.pallets[i],
                     "Cut": self.to_dt(self.cut[i]),
                     "Arrival": self.to_dt(self.arrival[i]),
-                    "Gap (min)": self.gap[i] / 60,
+                    "Time to arrival (min)": (self.arrival[i] - t) / 60,
                     "Waiting (min)": (t - self.cut[i]) / 60,
                     "Late": arrived,
                     "Late for (min)": max(0.0, (t - self.arrival[i]) / 60),
@@ -346,34 +340,45 @@ class Simulation:
             )
         queue = pd.DataFrame(rows)
 
-        # Lanes.
+        # LLs being processed in lanes, soonest arrival first (one per busy lane).
+        lane_rows = []
+        for i in sorted(in_lane, key=lambda k: self.key[k]):
+            lane_rows.append(
+                {
+                    "Lane": self.lane[i] + 1,
+                    "LL": self.ll[i],
+                    "Forwarder": self.forwarder[i],
+                    "Zone": self.zone[i],
+                    "Cartons": self.cartons[i],
+                    "Pallets": self.pallets[i],
+                    "Arrival": self.to_dt(self.arrival[i]),
+                    "Time to arrival (min)": (self.arrival[i] - t) / 60,
+                    "Waiting (min)": (self.call[i] - self.cut[i]) / 60,
+                    "Late": t >= self.arrival[i],
+                    "Late for (min)": max(0.0, (t - self.arrival[i]) / 60),
+                    "Remaining (min)": (self.finish[i] - t) / 60,
+                }
+            )
+        in_lanes = pd.DataFrame(lane_rows)
+
+        # Lanes: idle, or the one LL being processed.
+        by_lane = {self.lane[i]: i for i in in_lane}
         lanes = []
         for L in range(p.n_lanes):
-            members = sorted(
-                (i for i in in_lane if self.lane[i] == L), key=lambda k: self.call_seq[k]
-            )
-            current = next((i for i in members if self.start[i] <= t), None)
+            i = by_lane.get(L)
             lanes.append(
                 {
                     "Lane": L + 1,
-                    "Queue (cartons)": sum(self.cartons[i] for i in members),
-                    "Cap": p.lane_queue_cap,
-                    "Processing": self.ll[current] if current is not None else None,
-                    "Remaining (min)": (self.finish[current] - t) / 60 if current is not None else None,
-                    "Waiting behind": [self.ll[i] for i in members if i != current],
+                    "Processing": self.ll[i] if i is not None else None,
+                    "Cartons": self.cartons[i] if i is not None else None,
+                    "Remaining (min)": (self.finish[i] - t) / 60 if i is not None else None,
+                    "Progress": (t - self.start[i]) / (self.finish[i] - self.start[i]) if i is not None else 0.0,
                 }
             )
 
         # Zones.
-        waiting_for_zone = {z: 0 for z in self.zones}
-        for i in in_queue:
-            if t < self.arrival[i] and used[self.zone[i]] + self.pallets[i] > p.zone_capacity:
-                waiting_for_zone[self.zone[i]] += 1
-        zrows = []
-        for z in self.zones:
-            here = [i for i in staged if self.zone[i] == z]
-            dwell = [(t - self.finish[i]) / 60 for i in here]
-            zrows.append(
+        zones = pd.DataFrame(
+            [
                 {
                     "Zone": z,
                     "Capacity": p.zone_capacity,
@@ -381,13 +386,13 @@ class Simulation:
                     "Reserved pallets": reserved_p[z],
                     "Used": used[z],
                     "Used %": 100 * used[z] / p.zone_capacity,
-                    "Staged LLs": len(here),
-                    "LLs queued for this zone (zone full)": waiting_for_zone[z],
-                    "Staging time mean (min)": sum(dwell) / len(dwell) if dwell else 0.0,
-                    "Staging time max (min)": max(dwell) if dwell else 0.0,
+                    "Staged LLs": staged_n[z],
+                    "Reserved LLs": reserved_n[z],
+                    "LLs in zone": staged_n[z] + reserved_n[z],
                 }
-            )
-        zones = pd.DataFrame(zrows)
+                for z in self.zones
+            ]
+        )
 
         # Late LLs: forwarder has arrived and the LL was not staged by then.
         late_idx = [i for i in idx if self.arrival[i] <= t and self.finish[i] > self.arrival[i]]
@@ -407,7 +412,6 @@ class Simulation:
         )
         vals = list(late_min.values())
 
-        carton_total = sum(self.cartons)
         return {
             "clock": self.to_dt(t),
             "counts": {
@@ -421,9 +425,10 @@ class Simulation:
                 "LLs cut": len(cut_so_far),
                 "LLs total": self.n,
                 "cartons cut": sum(self.cartons[i] for i in cut_so_far),
-                "cartons total": carton_total,
+                "cartons total": sum(self.cartons),
             },
             "queue": queue,
+            "in_lanes": in_lanes,
             "lanes": lanes,
             "zones": zones,
             "late_now": late_now_df,

@@ -17,6 +17,11 @@ def fmt_dur(minutes: float) -> str:
     return f"{m // 60} h {m % 60:02d} min"
 
 
+def fmt_signed_dur(minutes: float) -> str:
+    """A countdown: '45 min', or '-12 min' once the time has passed."""
+    return fmt_dur(minutes) if round(minutes) >= 0 else "-" + fmt_dur(-minutes)
+
+
 def fmt_hm(ts: pd.Timestamp) -> str:
     return pd.Timestamp(ts).strftime("%H:%M")
 
@@ -32,37 +37,73 @@ def zone_status(used: float, capacity: float, warn_pct: float) -> str:
 
 
 # ------------------------------------------------------------------- queue
-def queue_display(queue: pd.DataFrame) -> pd.DataFrame:
-    """Shape the engine's queue table for display (DSH-11 to DSH-13)."""
-    if queue.empty:
-        return pd.DataFrame(
-            columns=["#", "LL", "Forwarder", "Zone", "Cartons", "Pallets", "Cut",
-                     "Arrival", "Gap", "Waiting", "Status"]
-        )
+TABLE_COLUMNS = ["#", "LL", "Forwarder", "Zone", "Cartons", "Pallets", "Arrival",
+                 "Time to arrival", "Waiting", "Status"]
 
-    def status(row) -> str:
-        if row["Late"]:
-            return f"LATE {fmt_dur(row['Late for (min)'])}, {row['Reason held']}"
-        if row["Next"]:
-            return f"NEXT, {row['Reason held']}"
+
+def _upcoming_status(row) -> str:
+    if row["Late"]:
+        return f"LATE {fmt_dur(row['Late for (min)'])}, waiting for a free lane"
+    if row["Reason held"].startswith("zone"):
         return f"Held: {row['Reason held']}"
+    if row["Next"]:
+        return "NEXT, waiting for a free lane"
+    return "Waiting: all lanes busy"
 
-    out = pd.DataFrame(
-        {
-            "#": queue["Position"],
-            "LL": queue["LL"],
-            "Forwarder": queue["Forwarder"],
-            "Zone": queue["Zone"],
-            "Cartons": queue["Cartons"],
-            "Pallets": queue["Pallets"],
-            "Cut": queue["Cut"].map(fmt_hm),
-            "Arrival": queue["Arrival"].map(fmt_hm),
-            "Gap": queue["Gap (min)"].map(fmt_dur),
-            "Waiting": queue["Waiting (min)"].map(fmt_dur),
-            "Status": queue.apply(status, axis=1),
-        }
-    )
-    return out
+
+def _in_lane_status(row) -> str:
+    text = f"Processing, lane {int(row['Lane'])}, {fmt_dur(row['Remaining (min)'])} left"
+    return f"LATE {fmt_dur(row['Late for (min)'])}, {text.lower()}" if row["Late"] else text
+
+
+def call_out_table(queue: pd.DataFrame, in_lanes: pd.DataFrame,
+                   include_in_lanes: bool = False) -> pd.DataFrame:
+    """The call-out queue table (DSH-7 to DSH-10).
+
+    Upcoming LLs are in call-out order (soonest arrival first) and carry a queue
+    position. With ``include_in_lanes`` the LLs being processed in lanes are added
+    **above** them, soonest arrival first, with no position. There is no cut time
+    column. Time to arrival counts down, and goes negative once the forwarder has
+    arrived.
+    """
+    parts = []
+    if include_in_lanes and not in_lanes.empty:
+        parts.append(
+            pd.DataFrame(
+                {
+                    "#": "",
+                    "LL": in_lanes["LL"],
+                    "Forwarder": in_lanes["Forwarder"],
+                    "Zone": in_lanes["Zone"],
+                    "Cartons": in_lanes["Cartons"],
+                    "Pallets": in_lanes["Pallets"],
+                    "Arrival": in_lanes["Arrival"].map(fmt_hm),
+                    "Time to arrival": in_lanes["Time to arrival (min)"].map(fmt_signed_dur),
+                    "Waiting": in_lanes["Waiting (min)"].map(fmt_dur),
+                    "Status": in_lanes.apply(_in_lane_status, axis=1),
+                }
+            )
+        )
+    if not queue.empty:
+        parts.append(
+            pd.DataFrame(
+                {
+                    "#": queue["Position"].astype(str),
+                    "LL": queue["LL"],
+                    "Forwarder": queue["Forwarder"],
+                    "Zone": queue["Zone"],
+                    "Cartons": queue["Cartons"],
+                    "Pallets": queue["Pallets"],
+                    "Arrival": queue["Arrival"].map(fmt_hm),
+                    "Time to arrival": queue["Time to arrival (min)"].map(fmt_signed_dur),
+                    "Waiting": queue["Waiting (min)"].map(fmt_dur),
+                    "Status": queue.apply(_upcoming_status, axis=1),
+                }
+            )
+        )
+    if not parts:
+        return pd.DataFrame(columns=TABLE_COLUMNS)
+    return pd.concat(parts, ignore_index=True)
 
 
 # ------------------------------------------------------------------- zones

@@ -114,7 +114,64 @@ These fill gaps the PRD left open, and are **not yet confirmed**. Please check t
 | B7 | Pressing Play at the end of the day restarts from the beginning | Avoids a Play button that does nothing |
 | B8 | The sidebar settings reach beyond the PRD defaults (lanes 1 to 24, throughput 25 to 400, lane cap 50 to 400, zone capacity 12 to 96) | They let a reviewer explore, for example a 3-lane run to see a "next" row and late rows in the queue |
 
-## 6. Items to revisit later
+## 6. Changes in PRD v1.1 (built)
+
+Requested on 2026-11-15, and **built the same day** (engine, dashboard and 96 passing tests). Answers to Q1 to Q7 were all given on 2026-11-15 and are recorded below.
+
+| Q | Answer given 2026-11-15 |
+|---|---|
+| Q1 | Yes, the call-out order changes. Supersedes D1 (smallest gap first) |
+| Q2 | Zone cards are primarily in pallets. Below the progress bar: pallets staged, pallets reserved, and the LL count in the zone |
+| Q3 | Correct (the existing four cards). Each card segment gets a header |
+| Q4 | Option B: only the LL being processed in each lane. **Also a rule change:** remove the 100-carton restriction, LLs wait in the priority queue to enter a lane, and a lane processes one LL at a time with processing time from the 100 cartons per hour rule |
+| Q5 | Correct: upcoming only (default), and upcoming and in lanes |
+| Q6 | In-lane rows are grouped at the top of the table, with the earliest LL at the top |
+| Q7 | Yes, the zone detail table keeps its time in staging column |
+
+**Consequences of the Q4 answer:** D5 (an LL that does not fit a lane blocks the queue) no longer applies, because there is no fit test. Lane assumptions A11 to A18 change: lane queue size, no overshoot and oversize LLs are replaced by one LL per lane. The `lane_queue_cap` parameter is removed. At 12 lanes the trial shows the same late LLs as with the old lane queues (7 LLs, 225 minutes), but 108 LLs wait in the priority queue against 60 (PRD section 8, trial 2). Also corrected: the peak hour cuts **1,113 cartons**, not about 770 as the PRD said, so lanes are about 93% used at the peak.
+
+**Interpretations I made, please check:** When several lanes are free, the lowest-numbered one is used. "Earliest LL" in Q6 means the LL whose forwarder arrives soonest. The "LL count in the zone" in Q2 is staged LLs plus LLs reserved in a lane. "Give a header" in Q3 means a header on every segment of the call-out view.
+
+The requested changes themselves:
+
+| # | Requested change | Status |
+|---|---|---|
+| P1 | Order the call-out queue by time to arrival | Approved (Q1). It supersedes D1 (smallest gap first), and `engine.py` and its tests change. Trial at 12 lanes: late LLs 9 to 7, total lateness 242 to 225 minutes. At 3 lanes: late LLs 101 to 151 |
+| P2 | Call-out view becomes the first tab | Pending |
+| P3 | LL progress and late LLs move to the call-out view | Pending |
+| P4 | Zone cards keep only the staged and reserved breakdown. Staging time and "queued for this zone" are removed | Pending. This also removes the dashboard staging time readout, which Q2 in the earlier log said to keep so reviewers could see its cost. The engine still calculates it |
+| P5 | Call-out view order: LL progress, late LLs, queue breakdown cards, call-out queue | Pending |
+| P6 | Drop the cut time column, and add a filter to include LLs being processed in lanes | Pending |
+| P7 | Keep lane cards, remove the "Nothing behind" line | Pending |
+
+| # | Open question | Default used in the PRD |
+|---|---|---|
+| Q1 | Does ordering by time to arrival change the real call-out order, or only the table sort? | The call-out order changes |
+| Q2 | Zone card breakdown in LLs or pallets? | Both, LL count first |
+| Q3 | What are the queue breakdown cards? | The existing four cards. A per-zone queue breakdown is the alternative |
+| Q4 | Only the LL processing in each lane, or every LL in a lane? | Every LL in a lane |
+| Q5 | Filter options and default | Upcoming only (default), upcoming and in lanes |
+| Q6 | In-lane rows mixed into one sort, or grouped? | Mixed, sorted by time to arrival |
+| Q7 | Keep "time in staging" in the zone detail list? | Kept |
+
+### Choices made while building v1.1
+
+These fill small gaps the PRD left open, and are **not yet confirmed**. Please check them.
+
+| # | Choice | Why |
+|---|---|---|
+| B9 | In the queue table, the **Waiting** column shows time since the LL was cut for upcoming LLs, and the time it waited in the queue before entering its lane for in-lane rows | The cut time column was dropped, so this is the only place the wait shows |
+| B10 | Status wording: "Held: zone N full", "NEXT, waiting for a free lane", "Waiting: all lanes busy", "LATE x min, waiting for a free lane", and "Processing, lane N, x min left" | The old "no lane space" no longer made sense once lanes stopped holding queues |
+| B11 | "NEXT" marks the first upcoming LL that is not held by its zone. It is always waiting for a lane, because if a lane were free it would already have gone | Follows from the lane rule |
+| B12 | The "#" (queue position) column is blank for in-lane rows. A late LL being processed is tinted red rather than blue | Q6 asked for no queue position on in-lane rows, and lateness matters more than state |
+| B13 | The zone card shows its three figures as separate lines: pallets staged, pallets reserved, LLs in the zone | Q2 asked for them below the progress bar |
+| B14 | "LLs in the zone" counts staged LLs plus LLs being processed that reserved pallets. An LL that skipped the zone check is not counted | It reserves no pallets |
+| B15 | The "Queue breakdown" card for cartons is labelled "Cartons being processed", and "LLs in lanes" is never more than the lane count | Matches the one-LL-per-lane rule |
+| B16 | The zone detail list and the occupancy chart sit on the floor view, and the recently staged and event log toggles on the call-out view | Not specified by the request |
+| B17 | The engine's zone snapshot no longer includes the staging time and queued figures. Time in staging is still in the zone detail list, in `ll_table()` and in `summary()` | The dashboard no longer shows them (P4) |
+| B18 | **Correction:** with 24 lanes, up to 19 lanes are busy at once, not 17 as the PRD said before the build | My earlier estimate sampled every 2 minutes, and the engine measures exactly |
+
+## 7. Items to revisit later
 
 These are not open questions for the mockup, but they are choices made for the simulation that the full build may change.
 

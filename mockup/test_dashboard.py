@@ -38,6 +38,14 @@ def test_fmt_dur(minutes, text):
 
 
 @pytest.mark.parametrize(
+    "minutes, text",
+    [(45, "45 min"), (0, "0 min"), (-0.2, "0 min"), (-12, "-12 min"), (-75, "-1 h 15 min")],
+)
+def test_fmt_signed_dur_goes_negative_after_arrival(minutes, text):
+    assert vh.fmt_signed_dur(minutes) == text
+
+
+@pytest.mark.parametrize(
     "used, status", [(0, "ok"), (38, "ok"), (39, "warn"), (47, "warn"), (48, "full"), (50, "full")]
 )
 def test_zone_status_thresholds(used, status):
@@ -65,32 +73,90 @@ def test_zone_detail_adds_up_to_the_zone_card(sim, hour):
     for z in sim.zones:
         detail = vh.zone_detail(sim, z, clock)
         assert detail["Pallets"].sum() == zones.loc[z, "Used"]
+        assert len(detail) == zones.loc[z, "LLs in zone"]
         assert (detail["State"] == "Staged").sum() == zones.loc[z, "Staged LLs"]
 
 
-def test_queue_display_marks_next_late_and_held():
-    # With 12 lanes the queue is only held by full zones, so no NEXT row occurs. With 3 lanes
-    # lane space runs short, which shows NEXT and LATE rows but no zone ever fills.
-    seen = {"next": False, "held": False, "late": False}
+def test_zone_detail_keeps_the_time_in_staging_column(sim):
+    assert "Time in staging" in vh.zone_detail(sim, 1, at_time(sim, 12)).columns
+
+
+def busy_moments(sim, step="10min"):
+    return pd.date_range(sim.start_time, sim.end_time, freq=step)
+
+
+def test_table_has_no_cut_time_or_gap_column(sim):
+    clock = at_time(sim, 11)
+    state = sim.state_at(clock)
+    table = vh.call_out_table(state["queue"], state["in_lanes"], include_in_lanes=True)
+    assert list(table.columns) == vh.TABLE_COLUMNS
+    assert "Cut" not in table.columns and "Gap" not in table.columns
+    assert "Time to arrival" in table.columns
+
+
+def test_upcoming_only_shows_exactly_the_queue(sim):
+    for clock in busy_moments(sim):
+        state = sim.state_at(clock)
+        table = vh.call_out_table(state["queue"], state["in_lanes"], include_in_lanes=False)
+        assert len(table) == len(state["queue"])
+        assert not table["Status"].str.startswith("Processing").any()
+        if len(table):
+            assert list(table["#"]) == [str(k) for k in range(1, len(table) + 1)]
+
+
+def test_with_in_lanes_the_processing_rows_are_grouped_at_the_top(sim):
+    saw_both = False
+    for clock in busy_moments(sim, "5min"):
+        state = sim.state_at(clock)
+        table = vh.call_out_table(state["queue"], state["in_lanes"], include_in_lanes=True)
+        n_lane = len(state["in_lanes"])
+        assert len(table) == n_lane + len(state["queue"])
+        assert n_lane == state["counts"]["in lane"] <= sim.params.n_lanes
+        top = table.head(n_lane)
+        assert top["Status"].str.contains("rocessing").all()
+        assert (top["#"] == "").all()
+        assert not table.iloc[n_lane:]["Status"].str.contains("rocessing").any()
+        saw_both |= bool(n_lane and len(state["queue"]))
+        # Soonest arrival first inside the in-lane group.
+        if n_lane > 1:
+            assert state["in_lanes"]["Time to arrival (min)"].is_monotonic_increasing
+    assert saw_both, "expected moments with both in-lane and upcoming rows"
+
+
+def test_table_marks_next_late_held_and_processing():
+    # With 12 lanes the queue is only held by full zones. With 3 lanes lanes run short too, which
+    # shows NEXT and LATE rows, and no zone ever fills.
+    seen = {"next": False, "held": False, "late": False, "processing": False}
     for lanes in (12, 3):
-        sim = Simulation(load_data(), Params(n_lanes=lanes))
-        for clock in pd.date_range(sim.start_time, sim.end_time, freq="5min"):
-            q = sim.state_at(clock)["queue"]
-            disp = vh.queue_display(q)
-            assert len(disp) == len(q)
-            if disp.empty:
+        s = Simulation(load_data(), Params(n_lanes=lanes))
+        for clock in pd.date_range(s.start_time, s.end_time, freq="5min"):
+            state = s.state_at(clock)
+            table = vh.call_out_table(state["queue"], state["in_lanes"], include_in_lanes=True)
+            if table.empty:
                 continue
-            assert list(disp["#"]) == list(range(1, len(disp) + 1))
-            assert disp["Status"].str.startswith("NEXT").sum() <= 1
-            seen["next"] |= bool(disp["Status"].str.startswith("NEXT").any())
-            seen["held"] |= bool(disp["Status"].str.contains("zone .* full", regex=True).any())
-            seen["late"] |= bool(disp["Status"].str.startswith("LATE").any())
+            assert table["Status"].str.startswith("NEXT").sum() <= 1
+            seen["next"] |= bool(table["Status"].str.startswith("NEXT").any())
+            seen["held"] |= bool(table["Status"].str.contains("Held: zone .* full", regex=True).any())
+            seen["late"] |= bool(table["Status"].str.startswith("LATE").any())
+            seen["processing"] |= bool(table["Status"].str.contains("rocessing, lane").any())
     assert all(seen.values()), seen
 
 
-def test_queue_display_of_an_empty_queue():
-    empty = vh.queue_display(pd.DataFrame())
-    assert empty.empty and "Status" in empty.columns
+def test_time_to_arrival_is_negative_for_late_rows():
+    s = Simulation(load_data(), Params(n_lanes=3))
+    for clock in pd.date_range(s.start_time, s.end_time, freq="10min"):
+        state = s.state_at(clock)
+        table = vh.call_out_table(state["queue"], state["in_lanes"], include_in_lanes=True)
+        late = table[table["Status"].str.startswith("LATE")]
+        if len(late):
+            assert late["Time to arrival"].str.startswith("-").all()
+            return
+    pytest.fail("no late row found")
+
+
+def test_call_out_table_of_nothing():
+    empty = vh.call_out_table(pd.DataFrame(), pd.DataFrame(), include_in_lanes=True)
+    assert empty.empty and list(empty.columns) == vh.TABLE_COLUMNS
 
 
 def test_event_log_is_newest_first_and_respects_the_clock(sim):
@@ -130,11 +196,38 @@ def go_to(at, hour, minute=0):
     return at
 
 
-def test_app_loads_with_two_tabs_and_the_synthetic_note():
+def all_html(at):
+    return " ".join(m.value for m in at.markdown)
+
+
+def queue_table(at):
+    """The call-out queue table on the page (found by its columns)."""
+    tables = [df.value for df in at.dataframe if "Time to arrival" in df.value.columns]
+    assert tables, "queue table not found"
+    return tables[0]
+
+
+def test_app_loads_with_the_call_out_view_first():
     at = run_app()
-    assert [t.label for t in at.tabs] == ["Floor view", "Call-out view"]
+    assert [t.label for t in at.tabs] == ["Call-out view", "Floor view"]
     assert "Mockup" in at.info[0].value
     assert at.title[0].value.endswith("Staging dashboard preview")
+
+
+def test_call_out_view_has_its_segments_in_order():
+    at = run_app()
+    assert [e.label for e in at.expander][:3] == ["LL progress", "Late LLs", "Queue breakdown"]
+    assert all(e.proto.expanded for e in at.expander[:3])
+    headers = [h.value for h in at.subheader]
+    call_out = headers[: headers.index("Zones")]
+    assert call_out == ["Call-out queue", "Lanes"]
+    assert headers[headers.index("Zones"):] == ["Zones", "Zone detail"]
+
+
+def test_ll_progress_and_late_lls_are_no_longer_on_the_floor_view():
+    at = run_app()
+    floor_headers = [h.value for h in at.subheader][2:]
+    assert "LL progress" not in floor_headers and "Late LLs" not in floor_headers
 
 
 @pytest.mark.parametrize("hour, minute", [(6, 30), (9, 0), (11, 0), (13, 30), (16, 0), (18, 0), (23, 0)])
@@ -147,14 +240,50 @@ def test_app_matches_the_engine_at_different_times(sim, hour, minute):
     assert metric(at, "Staged") == str(state["counts"]["staged"])
     assert metric(at, "Completed") == str(state["counts"]["completed"])
     assert metric(at, "LLs in the queue") == str(len(state["queue"]))
+    assert metric(at, "LLs in lanes") == str(state["counts"]["in lane"])
     assert metric(at, "Late so far") == str(state["late_summary"]["late LLs so far"])
 
 
-def test_app_shows_six_zone_cards_and_twelve_lane_cards():
+def test_zone_cards_show_pallets_and_no_staging_time_or_queued_count():
     at = go_to(run_app(), 11, 0)
-    html = " ".join(m.value for m in at.markdown)
-    assert html.count("<b>Zone ") == 6
+    cards = [m.value for m in at.markdown if "<b>Zone " in m.value]
+    assert len(cards) == 6
+    for card in cards:
+        assert "pallets (" in card  # the headline is in pallets
+        assert "Pallets staged:" in card
+        assert "Pallets reserved:" in card
+        assert "LLs in the zone:" in card
+        for gone in ("average", "longest", "staging time", "Queued", "waiting for this zone"):
+            assert gone.lower() not in card.lower(), gone
+
+
+def test_lane_cards_show_one_ll_and_no_behind_line(sim):
+    at = go_to(run_app(), 11, 0)
+    html = all_html(at)
     assert html.count("<b>Lane ") == 12
+    assert "Nothing behind" not in html and "Behind:" not in html
+    state = sim.state_at(datetime(2026, 9, 8, 11, 0))
+    assert html.count("Processing LL") == state["counts"]["in lane"]
+    assert html.count(">Idle<") == 12 - state["counts"]["in lane"]
+
+
+def test_the_filter_defaults_to_upcoming_only_and_can_add_lanes(sim):
+    at = go_to(run_app(), 11, 0)
+    state = sim.state_at(datetime(2026, 9, 8, 11, 0))
+    assert at.radio(key="queue_filter").value == "Upcoming LLs only"
+    assert len(queue_table(at)) == len(state["queue"])
+    at.radio(key="queue_filter").set_value("Upcoming and in lanes").run()
+    assert not at.exception, [e.value for e in at.exception]
+    table = queue_table(at)
+    assert len(table) == len(state["queue"]) + state["counts"]["in lane"]
+    # The rows being processed come first.
+    assert table.head(state["counts"]["in lane"])["Status"].str.contains("rocessing").all()
+
+
+def test_queue_table_columns_have_no_cut_time():
+    at = go_to(run_app(), 11, 0)
+    at.radio(key="queue_filter").set_value("Upcoming and in lanes").run()
+    assert list(queue_table(at).columns) == vh.TABLE_COLUMNS
 
 
 def test_app_shows_a_held_queue_at_midday(sim):
@@ -187,15 +316,22 @@ def test_play_and_restart_buttons():
     assert at.session_state["clock"].hour == 6
 
 
-def test_changing_a_setting_resimulates_and_resets_the_clock():
+def test_changing_the_lane_count_resimulates_and_resets_the_clock():
     at = go_to(run_app(), 12, 0)
     at.sidebar.slider(key="set_n_lanes").set_value(3).run()
     assert not at.exception, [e.value for e in at.exception]
     assert at.session_state["clock"].hour == 6
-    html = " ".join(m.value for m in at.markdown)
-    assert html.count("<b>Lane ") == 3
+    assert all_html(at).count("<b>Lane ") == 3
     go_to(at, 11, 0)
     assert int(metric(at, "LLs in the queue")) > 0
+
+
+def test_there_is_no_lane_queue_cap_setting():
+    at = run_app()
+    labels = [s.label for s in at.sidebar.slider]
+    assert not any("cap" in label.lower() and "lane" in label.lower() for label in labels)
+    assert labels == ["Lanes", "Lane throughput (cartons per hour)", "Zone capacity (pallets)",
+                      "Zone warning threshold (%)"]
 
 
 def test_reset_to_defaults_restores_twelve_lanes():
@@ -203,10 +339,10 @@ def test_reset_to_defaults_restores_twelve_lanes():
     at.sidebar.slider(key="set_n_lanes").set_value(4).run()
     next(b for b in at.sidebar.button if "Reset" in b.label).click().run()
     assert at.session_state["set_n_lanes"] == 12
-    assert " ".join(m.value for m in at.markdown).count("<b>Lane ") == 12
+    assert all_html(at).count("<b>Lane ") == 12
 
 
-def test_playing_advances_the_clock_by_speed_times_tick(sim):
+def test_playing_advances_the_clock_by_speed_times_tick():
     at = run_app()
     at.session_state["clock"] = datetime(2026, 9, 8, 10, 0)
     at.session_state["speed"] = 20
