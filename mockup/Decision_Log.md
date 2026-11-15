@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Date | 2026-11-15 |
-| Applies to | `mockup/PRD.md` v0.9 |
+| Applies to | `mockup/PRD.md` v1.0 |
 | Source of decisions | Project owner's replies to the assumptions and open questions listed in PRD v0.7 |
 
 This file records the assumptions made while drafting the PRD and the answers given to each open question, so the reasoning stays traceable. The PRD holds the resulting requirements. This file holds the "why".
@@ -99,7 +99,22 @@ These fill gaps the PRD left open. **I1 to I7 were accepted by the project owner
 | I7 | Two diagnostic switches (`zone_gate`, `arrived_skips_zone_check`) exist in the engine parameters | They only reproduce the two reference rows in PRD section 8. They are not dashboard settings | Accepted |
 | I8 | Tests are written for **pytest** (originally `unittest`, because pytest was not installed) | `pytest` has since been installed and is listed in `requirements.txt`. The tests were rewritten with fixtures, plain asserts and parametrisation, and now number 36 | Changed by owner, done |
 
-## 5. Items to revisit later
+## 5. Dashboard choices made while building the Streamlit app (PRD v1.0)
+
+These fill gaps the PRD left open, and are **not yet confirmed**. Please check them.
+
+| # | Choice | Why |
+|---|---|---|
+| B1 | When no waiting LL can be called out, the call-out tab shows a warning ("every LL in the queue is waiting for its zone") instead of highlighting a "next" row | At the default 12 lanes the queue is only ever held by full zones, so a "next" row (an LL that is ready but waiting for a lane) almost never exists. It appears with fewer lanes, for example 3 |
+| B2 | Zone status is OK below 80% (the warning threshold), FILLING from 80%, FULL at 100%. The threshold is a sidebar setting | PRD section 4.3 sets 80% as the default |
+| B3 | Playback speed is chosen in simulated minutes per second (1 to 60, default 10). At 10, the day plays in about 1 minute 45 seconds | The PRD asks for configurable speed without values |
+| B4 | The jump slider works best when paused. Dragging it while playing is ignored | The timer moves the slider every refresh, and Streamlit cannot take both |
+| B5 | The occupancy chart, recently staged table and event log sit behind toggles and are off by default | They are the "Could" items, and leaving them off keeps each refresh light |
+| B6 | Changing any setting re-simulates the day, returns the clock to the start and stops playback | The old clock time may not exist in the new run |
+| B7 | Pressing Play at the end of the day restarts from the beginning | Avoids a Play button that does nothing |
+| B8 | The sidebar settings reach beyond the PRD defaults (lanes 1 to 24, throughput 25 to 400, lane cap 50 to 400, zone capacity 12 to 96) | They let a reviewer explore, for example a 3-lane run to see a "next" row and late rows in the queue |
+
+## 6. Items to revisit later
 
 These are not open questions for the mockup, but they are choices made for the simulation that the full build may change.
 

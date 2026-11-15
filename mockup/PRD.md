@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft v0.9 (all open questions resolved, simulation engine built and tested) |
+| Status | Draft v1.0 (all open questions resolved, engine and dashboard built and tested) |
 | Date | 2026-11-15 |
 | Location | `mockup/` (all mockup files live here) |
 | Related | `mockup/engine.py`, `mockup/test_engine.py`, `mockup/Decision_Log.md`, `mockup/Data _Prep.ipynb`, `data/Mockup_Data.xlsx`, SDP sections 2.2, 3.1 (requirement 6), 4.4 |
@@ -196,7 +196,8 @@ Layout: readable on a laptop or a wall display. The visual design follows the re
 - **Simulation engine (built):** `mockup/engine.py`, a plain Python module with no Streamlit dependency. It runs the day as a discrete-event simulation (events are an LL being cut, a forwarder arriving, an LL finishing processing, and a handover) and records every LL's timestamps. `Simulation.state_at(clock)` then returns the queue (with each row's reason held), lane contents, zone occupancy, late LLs and counters for any clock time, ready for the dashboard. `Simulation.summary()` gives the headline figures, `ll_table()` the per-LL results, and `event_log()` the event log (DSH-17).
 - **Tests (built):** `mockup/test_engine.py`, written for **pytest**. It holds small scenario tests, the section 10 build checks run on the real day, and checks of the section 8 figures. Run `python mockup/engine.py` for the summary, and `python -m pytest mockup -v` from the repository root for the tests (36 tests, all passing).
 - **Precompute, then replay.** Because the run is deterministic, the timeline is computed once per parameter set and cached (for example with `st.cache_data`). The clock only reads from it, which keeps the UI fast and makes pause, jump and restart simple. Changing a parameter recomputes the timeline.
-- **Streamlit:** two tabs matching section 6, and a clock that advances on a timer. Streamlit reruns the script on each interaction, so the clock position lives in `st.session_state`. `streamlit` is not yet in `requirements.txt` and must be added.
+- **Streamlit dashboard (built):** `mockup/app.py`, with pure helpers in `mockup/view_helpers.py`. Two tabs matching section 6. The clock advances on a `st.fragment` timer (every 0.5 s) and its position lives in `st.session_state`. The simulation is cached per set of parameters, so changing a setting in the sidebar re-simulates the day. Run it from the repository root with `python -m streamlit run mockup/app.py`. `streamlit` and `pytest` are in `requirements.txt`.
+- **Dashboard tests (built):** `mockup/test_dashboard.py` tests the helpers, and runs the app headless with Streamlit's `AppTest` to check that what is shown matches the engine at several clock times, that play, restart and settings changes work, and that the clock advances and stops at the end of the day. 75 tests in total across the suite, all passing.
 - **Files:** every new file lives under `mockup/`.
 
 ## 8. Review: what a trial run of these rules showed
@@ -269,6 +270,6 @@ SDP Table 14 puts "finalise M3 outputs and decision variables with Ops, finish m
 | 1 | Decisions recorded (done, see `Decision_Log.md`) | |
 | 2 | Simulation engine with the priority queue, lanes, zone gate and lateness tracking, and tests for the section 10 build checks (**done**, `engine.py` and `test_engine.py`) | Step 1 |
 | 3 | Confirm the section 8 results from the engine (**done**, table refreshed) | Step 2 |
-| 4 | Streamlit dashboard v1: header, Tab 1 zone cards, counters and late panel, Tab 2 queue and lane panel (DSH-1, 2, 4 to 6, 11 to 14) | Step 3 |
-| 5 | Should items: settings panel, staging time, workload, zone detail | Step 4 |
+| 4 | Streamlit dashboard v1: header, Tab 1 zone cards, counters and late panel, Tab 2 queue and lane panel (DSH-1, 2, 4 to 6, 11 to 14) (**done**, `app.py`) | Step 3 |
+| 5 | Should and Could items: settings panel, staging time, workload, zone detail, occupancy chart, recently staged, event log (**done**, all of DSH-1 to DSH-17 are built) | Step 4 |
 | 6 | Ops review session, with feedback captured for the December edits | Step 5 |
