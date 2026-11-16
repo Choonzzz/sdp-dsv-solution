@@ -41,7 +41,7 @@ _HANDOVER, _FINISH, _ARRIVAL, _CUT = 0, 1, 2, 3
 class Params:
     """Adjustable parameters (PRD section 4.3)."""
 
-    n_lanes: int = 12
+    n_lanes: int = 10
     lane_throughput: float = 100.0  # cartons per hour, per lane
     zone_capacity: int = 48  # pallets per zone
     # Diagnostic switches, used only to reproduce the reference rows of PRD section 8.
