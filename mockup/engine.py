@@ -9,7 +9,7 @@ Rules in short:
     the current time), soonest first. As the current time is the same for every
     LL, this is the same as ranking by arrival time, so the order never changes.
     Ties go to the earlier Added Date, then the lower LL number.
-  * 12 lanes (default). A lane processes one LL at a time and has no queue
+  * 10 lanes (default). A lane processes one LL at a time and has no queue
     behind it. An LL waits in the priority queue until a lane is free, then goes
     to the lowest-numbered free lane. There is no carton limit.
     Processing time = cartons / throughput.

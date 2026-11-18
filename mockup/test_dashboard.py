@@ -124,10 +124,10 @@ def test_with_in_lanes_the_processing_rows_are_grouped_at_the_top(sim):
 
 
 def test_table_marks_next_late_held_and_processing():
-    # With 12 lanes the queue is only held by full zones. With 3 lanes lanes run short too, which
+    # With 10 lanes the queue is only held by full zones. With 3 lanes lanes run short too, which
     # shows NEXT and LATE rows, and no zone ever fills.
     seen = {"next": False, "held": False, "late": False, "processing": False}
-    for lanes in (12, 3):
+    for lanes in (10, 3):
         s = Simulation(load_data(), Params(n_lanes=lanes))
         for clock in pd.date_range(s.start_time, s.end_time, freq="5min"):
             state = s.state_at(clock)
@@ -260,11 +260,11 @@ def test_zone_cards_show_pallets_and_no_staging_time_or_queued_count():
 def test_lane_cards_show_one_ll_and_no_behind_line(sim):
     at = go_to(run_app(), 11, 0)
     html = all_html(at)
-    assert html.count("<b>Lane ") == 12
+    assert html.count("<b>Lane ") == 10
     assert "Nothing behind" not in html and "Behind:" not in html
     state = sim.state_at(datetime(2026, 9, 8, 11, 0))
     assert html.count("Processing LL") == state["counts"]["in lane"]
-    assert html.count(">Idle<") == 12 - state["counts"]["in lane"]
+    assert html.count(">Idle<") == 10 - state["counts"]["in lane"]
 
 
 def test_the_filter_defaults_to_upcoming_only_and_can_add_lanes(sim):
@@ -334,12 +334,12 @@ def test_there_is_no_lane_queue_cap_setting():
                       "Zone warning threshold (%)"]
 
 
-def test_reset_to_defaults_restores_twelve_lanes():
+def test_reset_to_defaults_restores_ten_lanes():
     at = run_app()
     at.sidebar.slider(key="set_n_lanes").set_value(4).run()
     next(b for b in at.sidebar.button if "Reset" in b.label).click().run()
-    assert at.session_state["set_n_lanes"] == 12
-    assert all_html(at).count("<b>Lane ") == 12
+    assert at.session_state["set_n_lanes"] == 10
+    assert all_html(at).count("<b>Lane ") == 10
 
 
 def test_playing_advances_the_clock_by_speed_times_tick():

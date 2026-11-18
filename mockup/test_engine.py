@@ -394,7 +394,7 @@ def test_snapshot_before_start_and_after_end(sim):
 # Expected values quoted in PRD section 8 (v1.1 rules)
 # --------------------------------------------------------------------------
 def test_prd_default_12_lanes():
-    s = run(Params()).summary()
+    s = run(Params(n_lanes=12)).summary()
     assert s["max LLs in queue"] == 31
     assert s["LLs that waited"] == 108
     assert s["late LLs"] == 7

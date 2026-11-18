@@ -21,7 +21,7 @@ from engine import DATA_PATH, Params, Simulation, load_data  # noqa: E402
 
 st.set_page_config(page_title="Staging dashboard preview", page_icon="📦", layout="wide")
 
-DEFAULTS = {"n_lanes": 12, "lane_throughput": 100, "zone_capacity": 48, "warn_pct": 80}
+DEFAULTS = {"n_lanes": 10, "lane_throughput": 100, "zone_capacity": 48, "warn_pct": 80}
 TICK = 0.5  # real seconds between refreshes while playing
 SPEEDS = [1, 2, 5, 10, 20, 30, 60]  # simulated minutes per real second
 FILTER_OPTIONS = ["Upcoming LLs only", "Upcoming and in lanes"]
@@ -120,7 +120,7 @@ st.title("📦 Staging dashboard preview")
 st.info(
     "**Mockup.** Real LL volumes and cut times from 8 Sep 2026, with synthetic forwarders, zones, "
     "pallets and arrival times. The call-out rule is a simple placeholder: soonest forwarder "
-    "arrival first, 12 lanes that each process one LL at a time, and an LL waits while its zone "
+    "arrival first, 10 lanes that each process one LL at a time, and an LL waits while its zone "
     "is full."
 )
 
